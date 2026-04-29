@@ -1270,7 +1270,69 @@ export function extractionFunction(
           }
         }
       }
+      // Cursor Agents unified window: glass sidebar rows (replaces .agent-sidebar-cell in newer builds)
+      const glassTabRoots = document.querySelectorAll(
+        '.glass-sidebar-agent-list-container li.ui-sidebar-menu-item > div.glass-sidebar-agent-menu-btn'
+      );
+      if (glassTabRoots.length > 0) {
+        for (const tab of Array.from(glassTabRoots)) {
+          const labelEl = tab.querySelector('.ui-sidebar-menu-button-label');
+          const rawAgentTitle = (labelEl?.textContent || '').trim();
+          if (!rawAgentTitle) continue;
+
+          const group = tab.closest('.ui-sidebar-group');
+          const groupTitleEl = group?.querySelector('.ui-sidebar-group-label-title');
+          const rawGroupTitle = (groupTitleEl?.textContent || '').trim();
+
+          let displayTitle = cleanTabTitle(rawAgentTitle);
+          if (rawGroupTitle) {
+            const g = cleanTabTitle(rawGroupTitle);
+            if (g) {
+              displayTitle = `${g} / ${cleanTabTitle(rawAgentTitle)}`.substring(0, 120);
+            }
+          }
+
+          if (seenTitles.has(displayTitle)) continue;
+          seenTitles.add(displayTitle);
+
+          const composerId =
+            tab.getAttribute('data-composer-id')
+            || tab.closest('[data-composer-id]')?.getAttribute('data-composer-id')
+            || `glass:${displayTitle}`;
+
+          const isActive = tab.getAttribute('data-active') === 'true';
+
+          chatTabs.push({
+            composerId,
+            title: displayTitle,
+            isActive,
+            status: isActive ? 'active' : 'idle',
+            selectorPath: buildSelectorPath(tab),
+          });
+        }
+
+        if (containerComposerId) {
+          let matched = false;
+          for (const t of chatTabs) {
+            if (t.composerId === containerComposerId) {
+              matched = true;
+              t.isActive = true;
+              t.status = 'active';
+            }
+          }
+          if (matched) {
+            for (const t of chatTabs) {
+              if (t.composerId !== containerComposerId) {
+                t.isActive = false;
+                t.status = 'idle';
+              }
+            }
+          }
+        }
+      }
+
       for (const sel of chatTabSelectors) {
+        if (chatTabs.length > 0) break;
         let tabItems: NodeListOf<Element>;
         try {
           const root: Element | Document = scopeRoot || document;

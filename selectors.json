@@ -48,7 +48,8 @@
   },
   "chatTabList": {
     "strategies": [
-      ".agent-sidebar-cell"
+      ".agent-sidebar-cell",
+      ".glass-sidebar-agent-list-container li.ui-sidebar-menu-item > div.glass-sidebar-agent-menu-btn"
     ]
   },
   "newChatButton": {

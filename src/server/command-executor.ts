@@ -151,21 +151,61 @@ export class CommandExecutor {
       const clicked = await client.evaluate(`
         (() => {
           const title = ${JSON.stringify(tabTitle)};
-          const norm = s => s.trim().replace(/\\s+/g, ' ');
-          const target = norm(title).toLowerCase();
+          const norm = s => s.trim().replace(/\\s+/g, ' ').toLowerCase();
+          const target = norm(title);
+          function cleanTabTitle(raw) {
+            let t = (raw || '').trim().replace(/\\s+/g, ' ');
+            t = t.replace(/(@[\\w./]+)+\\s*$/, '');
+            return t.trim().substring(0, 120);
+          }
+          function glassCompositeForBtn(btn) {
+            const labelEl = btn.querySelector('.ui-sidebar-menu-button-label');
+            const rawAgent = (labelEl?.textContent || '').trim();
+            if (!rawAgent) return { composite: '', agentOnly: '' };
+            const group = btn.closest('.ui-sidebar-group');
+            const gt = group?.querySelector('.ui-sidebar-group-label-title');
+            const rawGroup = (gt?.textContent || '').trim();
+            let composite = cleanTabTitle(rawAgent);
+            if (rawGroup) {
+              const g = cleanTabTitle(rawGroup);
+              if (g) composite = (g + ' / ' + cleanTabTitle(rawAgent)).substring(0, 120);
+            }
+            return { composite: norm(composite), agentOnly: norm(rawAgent) };
+          }
+          const glassBtns = Array.from(document.querySelectorAll(
+            '.glass-sidebar-agent-list-container li.ui-sidebar-menu-item > div.glass-sidebar-agent-menu-btn'
+          ));
+          if (glassBtns.length > 0) {
+            const rows = glassBtns.map((btn) => ({
+              btn,
+              ...glassCompositeForBtn(btn),
+            })).filter((r) => r.composite);
+            const byComp = rows.filter((r) => r.composite === target);
+            if (byComp.length === 1) {
+              byComp[0].btn.click();
+              return true;
+            }
+            const byAgent = rows.filter((r) => r.agentOnly === target);
+            if (byAgent.length === 1) {
+              byAgent[0].btn.click();
+              return true;
+            }
+            if (byComp.length > 1 || byAgent.length > 1) {
+              throw new Error('Ambiguous tab title for glass sidebar: ' + title);
+            }
+          }
           const cells = document.querySelectorAll('.agent-sidebar-cell');
           for (const cell of Array.from(cells)) {
             const titleEl = cell.querySelector('.agent-sidebar-cell-text');
-            const text = norm(titleEl ? (titleEl.textContent || '') : (cell.textContent || '')).toLowerCase();
+            const text = norm(titleEl ? (titleEl.textContent || '') : (cell.textContent || ''));
             if (text === target) {
               cell.click();
               return true;
             }
           }
-          // Prefix fallback: match normalized prefix
           for (const cell of Array.from(cells)) {
             const titleEl = cell.querySelector('.agent-sidebar-cell-text');
-            const text = norm(titleEl ? (titleEl.textContent || '') : (cell.textContent || '')).toLowerCase();
+            const text = norm(titleEl ? (titleEl.textContent || '') : (cell.textContent || ''));
             if (text.startsWith(target) || target.startsWith(text)) {
               cell.click();
               return true;
