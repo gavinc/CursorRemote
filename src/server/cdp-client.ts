@@ -28,9 +28,11 @@ export class CdpClient extends EventEmitter {
   private pending = new Map<number, PendingCall>();
   private _connected = false;
 
-  async connect(wsUrl: string): Promise<void> {
+  async connect(wsUrl: string, options: { tlsInsecure?: boolean } = {}): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(wsUrl);
+      this.ws = new WebSocket(wsUrl, {
+        rejectUnauthorized: !options.tlsInsecure,
+      });
 
       this.ws.on('open', () => {
         this._connected = true;

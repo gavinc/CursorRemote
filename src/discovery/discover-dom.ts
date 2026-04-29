@@ -1,6 +1,119 @@
+import http from 'node:http';
+import https from 'node:https';
 import { CdpClient } from '../server/cdp-client.js';
 
 const CDP_URL = process.env.CDP_URL ?? 'http://127.0.0.1:9222';
+const CDP_HOST_HEADER = process.env.CDP_HOST_HEADER?.trim() ?? '';
+const CDP_WS_URL_BASE = process.env.CDP_WS_URL_BASE?.trim().replace(/\/$/, '') ?? '';
+const CDP_TLS_INSECURE = process.env.CDP_TLS_INSECURE === 'true';
+
+type CdpTarget = {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  webSocketDebuggerUrl?: string;
+};
+
+async function fetchCdpJson<T>(url: string): Promise<T> {
+  if (!CDP_HOST_HEADER && !CDP_TLS_INSECURE) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`CDP HTTP ${response.status}`);
+      }
+      return (await response.json()) as T;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    const parsed = new URL(url);
+    const isHttps = parsed.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const req = mod.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        servername: isHttps ? parsed.hostname : undefined,
+        port: parsed.port || undefined,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        headers: CDP_HOST_HEADER ? { Host: CDP_HOST_HEADER } : undefined,
+        rejectUnauthorized: isHttps ? !CDP_TLS_INSECURE : undefined,
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`CDP HTTP ${res.statusCode ?? '?'} ${body.slice(0, 200)}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body) as T);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+    );
+    req.setTimeout(8000, () => req.destroy(new Error('CDP request timed out')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function rewriteWebSocketUrls(targets: CdpTarget[]): CdpTarget[] {
+  if (!CDP_WS_URL_BASE) return targets;
+  return targets.map((target) => {
+    if (!target.webSocketDebuggerUrl) return target;
+    const path = new URL(target.webSocketDebuggerUrl).pathname;
+    return { ...target, webSocketDebuggerUrl: `${CDP_WS_URL_BASE}${path}` };
+  });
+}
+
+const agentSidebarProbe = `
+(() => {
+  const legacyCells = document.querySelectorAll('.agent-sidebar-cell');
+  const glassBtns = document.querySelectorAll(
+    '.glass-sidebar-agent-list-container li.ui-sidebar-menu-item > div.glass-sidebar-agent-menu-btn'
+  );
+  function cleanTabTitle(raw) {
+    let t = (raw || '').trim().replace(/\\s+/g, ' ');
+    t = t.replace(/(@[\\w./]+)+\\s*$/, '');
+    return t.trim().substring(0, 120);
+  }
+  const titles = [];
+  for (const btn of Array.from(glassBtns)) {
+    const labelEl = btn.querySelector('.ui-sidebar-menu-button-label');
+    const rawAgent = (labelEl?.textContent || '').trim();
+    if (!rawAgent) continue;
+    const group = btn.closest('.ui-sidebar-group');
+    const gt = group?.querySelector('.ui-sidebar-group-label-title');
+    const rawGroup = (gt?.textContent || '').trim();
+    let line = cleanTabTitle(rawAgent);
+    if (rawGroup) {
+      const g = cleanTabTitle(rawGroup);
+      if (g) line = (g + ' / ' + cleanTabTitle(rawAgent)).substring(0, 100);
+    }
+    if (btn.getAttribute('data-active') === 'true') line = '[active] ' + line;
+    titles.push(line);
+  }
+  return {
+    documentTitle: document.title,
+    legacyAgentSidebarCellCount: legacyCells.length,
+    glassAgentMenuButtonCount: glassBtns.length,
+    titlesSample: titles.slice(0, 25),
+  };
+})()
+`;
 
 interface DOMSummaryNode {
   tag: string;
@@ -15,18 +128,22 @@ interface DOMSummaryNode {
 
 async function main(): Promise<void> {
   console.log('=== Cursor DOM Discovery Tool ===\n');
-  console.log(`Connecting to: ${CDP_URL}\n`);
+  console.log(`CDP_URL: ${CDP_URL}`);
+  if (CDP_HOST_HEADER) console.log(`CDP_HOST_HEADER: ${CDP_HOST_HEADER}`);
+  if (CDP_WS_URL_BASE) console.log(`CDP_WS_URL_BASE: ${CDP_WS_URL_BASE}`);
+  if (CDP_TLS_INSECURE) console.log('CDP_TLS_INSECURE: true');
+  console.log('');
 
   // 1. List all targets
   console.log('--- CDP Targets ---\n');
-  let targets: Array<{ id: string; type: string; title: string; url: string; webSocketDebuggerUrl?: string }>;
+  let targets: CdpTarget[];
 
   try {
-    const resp = await fetch(`${CDP_URL}/json`);
-    targets = await resp.json() as typeof targets;
-  } catch {
+    targets = rewriteWebSocketUrls(await fetchCdpJson<CdpTarget[]>(`${CDP_URL}/json`));
+  } catch (err) {
     console.error(`Failed to connect to ${CDP_URL}/json`);
-    console.error('Make sure Cursor is running with --remote-debugging-port=9222');
+    console.error(err instanceof Error ? err.message : err);
+    console.error('For Tailscale HTTPS CDP, set CDP_HOST_HEADER (and CDP_WS_URL_BASE, CDP_TLS_INSECURE if needed). See .env.example.');
     process.exit(1);
   }
 
@@ -36,10 +153,45 @@ async function main(): Promise<void> {
     console.log(`    WS:  ${t.webSocketDebuggerUrl ?? 'N/A'}\n`);
   }
 
-  // 2. Connect to the best target
+  const workbenchPages = targets.filter(
+    t => t.type === 'page' && t.url.includes('workbench') && t.webSocketDebuggerUrl
+  );
+
+  console.log('--- Agent sidebar probe (issue #13 / chatTabs) ---\n');
+  console.log('Legacy: .agent-sidebar-cell. New Cursor Agents UI: .glass-sidebar-agent-menu-btn.\n');
+
+  for (const page of workbenchPages) {
+    const cli = new CdpClient();
+    try {
+      await cli.connect(page.webSocketDebuggerUrl!, { tlsInsecure: CDP_TLS_INSECURE });
+      const probe = await cli.evaluate(agentSidebarProbe) as {
+        documentTitle: string;
+        legacyAgentSidebarCellCount: number;
+        glassAgentMenuButtonCount: number;
+        titlesSample: string[];
+      };
+      console.log(`  Window: "${page.title}"`);
+      console.log(`    document.title: ${probe.documentTitle}`);
+      console.log(`    .agent-sidebar-cell count: ${probe.legacyAgentSidebarCellCount}`);
+      console.log(`    glass-sidebar agent row count: ${probe.glassAgentMenuButtonCount}`);
+      if (probe.titlesSample.length > 0) {
+        console.log(`    title sample (${probe.titlesSample.length}):`);
+        for (const line of probe.titlesSample) {
+          console.log(`      - ${line}`);
+        }
+      }
+      console.log('');
+    } catch (e) {
+      console.warn(`  Window: "${page.title}" — probe failed: ${e instanceof Error ? e.message : e}\n`);
+    } finally {
+      cli.disconnect();
+    }
+  }
+
+  // 2. Full DOM exploration: first workbench page (fallback: first page)
   const target =
-    targets.find(t => t.type === 'page' && t.url.includes('workbench')) ??
-    targets.find(t => t.type === 'page') ??
+    workbenchPages[0] ??
+    targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl) ??
     targets[0];
 
   if (!target?.webSocketDebuggerUrl) {
@@ -47,10 +199,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`--- Connecting to: "${target.title}" ---\n`);
+  console.log(`--- Full DOM exploration: "${target.title}" ---\n`);
 
   const client = new CdpClient();
-  await client.connect(target.webSocketDebuggerUrl);
+  await client.connect(target.webSocketDebuggerUrl, { tlsInsecure: CDP_TLS_INSECURE });
 
   // 3. Explore the DOM
   console.log('--- DOM Exploration ---\n');

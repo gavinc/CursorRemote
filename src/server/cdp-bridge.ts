@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import http from 'node:http';
+import https from 'node:https';
 import { CdpClient } from './cdp-client.js';
 import type { ServerConfig, CursorWindow } from './types.js';
 
@@ -118,7 +120,9 @@ export class CDPBridge extends EventEmitter {
       console.log(`[cdp-bridge] Connecting to target: "${target.title}" (${target.url})`);
 
       this.client = new CdpClient();
-      await this.client.connect(target.webSocketDebuggerUrl);
+      await this.client.connect(target.webSocketDebuggerUrl, {
+        tlsInsecure: this.config.cdpTlsInsecure,
+      });
       this._activeTargetId = target.id;
 
       this._activeWorkspaceName = await extractWorkspaceName(this.client, this.config.windowTitleQualifier);
@@ -196,19 +200,7 @@ export class CDPBridge extends EventEmitter {
     const url = `${this.config.cdpUrl}/json`;
     if (verbose) console.log(`[cdp-bridge] Discovering targets at ${url}`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    let response: Response;
-    try {
-      response = await fetch(url, { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!response.ok) {
-      throw new Error(`CDP target discovery failed: HTTP ${response.status}`);
-    }
-
-    const targets: CDPTarget[] = await response.json() as CDPTarget[];
+    const targets = this.rewriteWebSocketUrls(await this.fetchJson<CDPTarget[]>(url));
     if (verbose) {
       const pages = targets.filter(t => t.type === 'page');
       const rest = targets.filter(t => t.type !== 'page');
@@ -221,6 +213,76 @@ export class CDPBridge extends EventEmitter {
       }
     }
     return targets;
+  }
+
+  private async fetchJson<T>(url: string): Promise<T> {
+    if (!this.config.cdpHostHeader && !this.config.cdpTlsInsecure) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      let response: Response;
+      try {
+        response = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!response.ok) {
+        throw new Error(`CDP target discovery failed: HTTP ${response.status}`);
+      }
+      return await response.json() as T;
+    }
+
+    return await new Promise<T>((resolve, reject) => {
+      const parsed = new URL(url);
+      const isHttps = parsed.protocol === 'https:';
+      const client = isHttps ? https : http;
+      const req = client.request(
+        {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          servername: isHttps ? parsed.hostname : undefined,
+          port: parsed.port || undefined,
+          path: `${parsed.pathname}${parsed.search}`,
+          method: 'GET',
+          headers: this.config.cdpHostHeader ? { Host: this.config.cdpHostHeader } : undefined,
+          rejectUnauthorized: isHttps ? !this.config.cdpTlsInsecure : undefined,
+        },
+        (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            body += chunk;
+          });
+          res.on('end', () => {
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              reject(new Error(`CDP target discovery failed: HTTP ${res.statusCode ?? 'unknown'} ${body}`));
+              return;
+            }
+            try {
+              resolve(JSON.parse(body) as T);
+            } catch (err) {
+              reject(err);
+            }
+          });
+        }
+      );
+      req.setTimeout(5000, () => req.destroy(new Error('CDP target discovery timed out')));
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  private rewriteWebSocketUrls(targets: CDPTarget[]): CDPTarget[] {
+    const wsBase = this.config.cdpWsUrlBase.trim().replace(/\/$/, '');
+    if (!wsBase) return targets;
+
+    return targets.map((target) => {
+      if (!target.webSocketDebuggerUrl) return target;
+      const path = new URL(target.webSocketDebuggerUrl).pathname;
+      return {
+        ...target,
+        webSocketDebuggerUrl: `${wsBase}${path}`,
+      };
+    });
   }
 
   private targetsToWindows(targets: CDPTarget[]): CursorWindow[] {

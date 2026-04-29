@@ -614,6 +614,9 @@ All configuration is via environment variables with sensible defaults:
 | Variable           | Default                    | Description                              |
 | ------------------ | -------------------------- | ---------------------------------------- |
 | `CDP_URL`          | `http://127.0.0.1:9222`   | Cursor's CDP endpoint                    |
+| `CDP_HOST_HEADER`  | empty                      | Optional Host header for CDP discovery, useful for Tailscale Serve proxies |
+| `CDP_WS_URL_BASE`  | empty                      | Optional WebSocket base URL used to rewrite returned CDP `ws://...` URLs |
+| `CDP_TLS_INSECURE` | `false`                    | Disable TLS verification for trusted internal HTTPS CDP proxies |
 | `SERVER_PORT`      | `3000`                     | Port for the web client + socket.io      |
 | `SERVER_HOST`      | `0.0.0.0`                 | Bind address (0.0.0.0 for LAN access)   |
 | `POLL_INTERVAL_MS` | `500`                      | DOM polling frequency in ms              |

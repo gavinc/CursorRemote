@@ -332,6 +332,9 @@ export interface CommandResult {
 
 export interface ServerConfig {
   cdpUrl: string;
+  cdpHostHeader: string;
+  cdpWsUrlBase: string;
+  cdpTlsInsecure: boolean;
   serverPort: number;
   serverHost: string;
   pollIntervalMs: number;

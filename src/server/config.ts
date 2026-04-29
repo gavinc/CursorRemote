@@ -14,6 +14,9 @@ export function loadConfig(): ServerConfig {
 
   return {
     cdpUrl: process.env.CDP_URL ?? 'http://127.0.0.1:9222',
+    cdpHostHeader: process.env.CDP_HOST_HEADER ?? '',
+    cdpWsUrlBase: process.env.CDP_WS_URL_BASE ?? '',
+    cdpTlsInsecure: process.env.CDP_TLS_INSECURE === 'true',
     serverPort: parseInt(process.env.SERVER_PORT ?? '3000', 10),
     serverHost: process.env.SERVER_HOST ?? '127.0.0.1',
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '300', 10),

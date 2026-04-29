@@ -71,11 +71,18 @@ Cursor IDE  ←──CDP──→  Relay Server  ←──socket.io──→  Ph
 **Workspace name extraction**: After connecting to a target, the bridge runs `Runtime.evaluate` to read `vscode.context.configuration().workspace.uri` — a stable internal API available in every Cursor/VS Code Electron renderer. The `uri.path` basename gives the project folder name, and `uri.authority` provides the remote qualifier (WSL, SSH, etc.). This is platform-independent and unaffected by the volatile `document.title`. The qualifier suffix (e.g. `[WSL: ubuntu-24.04]`) can be disabled by setting `WINDOW_TITLE_QUALIFIER=false` in `.env` for cleaner Telegram topic names. For non-connected windows (discovered via `/json` but not yet polled), the bridge falls back to parsing the CDP target title: strip ` - Cursor` suffix, split on ` - `, take the project segment.
 
 **Lifecycle**:
-1. Fetch target list from `http://<CDP_URL>/json`
+1. Fetch target list from `<CDP_URL>/json`
 2. Filter all pages with `workbench` in URL → expose as `windows`
 3. Connect `CdpClient` to the selected (or first) target's `webSocketDebuggerUrl`
 4. Expose the `CdpClient` and `activeTargetId` to other modules
 5. On disconnect: emit event, start reconnection loop with exponential backoff
+
+For Tailscale Serve or other HTTPS CDP proxies, Chromium may reject DNS Host
+headers during target discovery. Set `CDP_HOST_HEADER=127.0.0.1:9222` to fetch
+through the proxy with a localhost Host header, set `CDP_WS_URL_BASE` to rewrite
+returned local WebSocket URLs to the proxy URL, and set `CDP_TLS_INSECURE=true`
+only for trusted internal TLS endpoints whose certificate chain is not trusted
+by Node.
 
 **Window switching** (`switchWindow(targetId)`):
 1. Disconnect current CdpClient
