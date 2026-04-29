@@ -708,10 +708,19 @@ export class CommandExecutor {
       (() => {
         const keywords = ${JSON.stringify(this.selectors.approveButton.textMatch ?? [])};
         const strategies = ${JSON.stringify(this.selectors.approveButton.strategies)};
+        const containerStrategies = ${JSON.stringify(this.selectors.chatContainer.strategies)};
+        let root = null;
+        for (const sel of containerStrategies) {
+          try {
+            root = document.querySelector(sel);
+            if (root) break;
+          } catch {}
+        }
+        if (!root) root = document.body;
 
         for (const selector of strategies) {
           try {
-            const buttons = document.querySelectorAll(selector);
+            const buttons = root.querySelectorAll(selector);
             for (const btn of Array.from(buttons)) {
               const text = (btn.textContent || '').trim().toLowerCase();
               if (text.includes('all')) {
@@ -723,7 +732,7 @@ export class CommandExecutor {
           } catch {}
         }
 
-        const allButtons = document.querySelectorAll('button');
+        const allButtons = root.querySelectorAll('button');
         for (const btn of Array.from(allButtons)) {
           const text = (btn.textContent || '').trim().toLowerCase();
           for (const kw of keywords) {
