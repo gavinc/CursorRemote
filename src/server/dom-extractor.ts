@@ -1147,25 +1147,35 @@ export function extractionFunction(
       });
     }
 
-    // --- Approval buttons ---
+    // --- Approval buttons (must scope to this composer `container`; document-wide
+    //     queries pick up other agents' chats and sticky toolbars, so approvals
+    //     never clear after the active composer is approved in multi-agent mode.)
     const pendingApprovals: CursorState['pendingApprovals'] = [];
     const approveButtons: { label: string; selector: string }[] = [];
     const rejectButtons: { label: string; selector: string }[] = [];
+    const seenApproveBtns = new Set<Element>();
+    const seenRejectBtns = new Set<Element>();
 
     for (const sel of approveSelectors) {
       try {
-        const btns = document.querySelectorAll(sel);
+        const btns = container.querySelectorAll(sel);
         for (const btn of Array.from(btns)) {
+          if (seenApproveBtns.has(btn)) continue;
           const label = btn.textContent?.trim() || btn.getAttribute('aria-label') || '';
-          if (label) approveButtons.push({ label, selector: buildSelectorPath(btn) });
+          if (label) {
+            seenApproveBtns.add(btn);
+            approveButtons.push({ label, selector: buildSelectorPath(btn) });
+          }
         }
       } catch { /* skip */ }
     }
     if (approveButtons.length === 0 && approveTextMatch.length > 0) {
-      for (const btn of Array.from(document.querySelectorAll('button'))) {
+      for (const btn of Array.from(container.querySelectorAll('button'))) {
+        if (seenApproveBtns.has(btn)) continue;
         const text = `${btn.textContent?.trim() || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase();
         for (const pat of approveTextMatch) {
           if (text.includes(pat.toLowerCase())) {
+            seenApproveBtns.add(btn);
             approveButtons.push({ label: btn.textContent?.trim() || pat, selector: buildSelectorPath(btn) });
             break;
           }
@@ -1175,18 +1185,24 @@ export function extractionFunction(
 
     for (const sel of rejectSelectors) {
       try {
-        const btns = document.querySelectorAll(sel);
+        const btns = container.querySelectorAll(sel);
         for (const btn of Array.from(btns)) {
+          if (seenRejectBtns.has(btn)) continue;
           const label = btn.textContent?.trim() || btn.getAttribute('aria-label') || '';
-          if (label) rejectButtons.push({ label, selector: buildSelectorPath(btn) });
+          if (label) {
+            seenRejectBtns.add(btn);
+            rejectButtons.push({ label, selector: buildSelectorPath(btn) });
+          }
         }
       } catch { /* skip */ }
     }
     if (rejectButtons.length === 0 && rejectTextMatch.length > 0) {
-      for (const btn of Array.from(document.querySelectorAll('button'))) {
+      for (const btn of Array.from(container.querySelectorAll('button'))) {
+        if (seenRejectBtns.has(btn)) continue;
         const text = `${btn.textContent?.trim() || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase();
         for (const pat of rejectTextMatch) {
           if (text.includes(pat.toLowerCase())) {
+            seenRejectBtns.add(btn);
             rejectButtons.push({ label: btn.textContent?.trim() || pat, selector: buildSelectorPath(btn) });
             break;
           }
